@@ -1012,6 +1012,12 @@ fn read_event<'de, A>(
                         return Err(A::Error::custom("none for value key=value"));
                     }
                 },
+                "contents" => {
+                    value = access.next_value()?;
+                    if value.is_none() {
+                        return Err(A::Error::custom("none for value key=contents"));
+                    }
+                },
                 other => {
                     return Err(A::Error::custom(format!("unexpected key in event {}", other)));
                 }
