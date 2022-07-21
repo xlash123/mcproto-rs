@@ -2815,12 +2815,13 @@ pub const LIGHT_DATA_SECTIONS: usize = 18;
 
 #[derive(Clone, PartialEq)]
 pub struct LightingData {
-    pub data: Box<[Option<[u8; LIGHT_DATA_LENGTH]>; LIGHT_DATA_SECTIONS]>,
+    // Use box to avoid allocating this on the stack
+    pub data: Box<[[u8; LIGHT_DATA_LENGTH]; LIGHT_DATA_SECTIONS]>,
 }
 
 impl LightingData {
-    fn deserialize(update_mask: VarInt, mut data: &[u8]) -> DeserializeResult<Self> {
-        let mut out = Box::new([None; LIGHT_DATA_SECTIONS]);
+    fn deserialize(update_mask: VarInt, _empty_mask: VarInt, mut data: &[u8]) -> DeserializeResult<Self> {
+        let mut out = Box::new([[0u8; LIGHT_DATA_LENGTH]; LIGHT_DATA_SECTIONS]);
         for i in 0..LIGHT_DATA_SECTIONS {
             // gotta read the var int
             if update_mask.0 & (1 << i) != 0 {
@@ -2835,9 +2836,7 @@ impl LightingData {
                 }
 
                 let (section, rest) = data.split_at(LIGHT_DATA_LENGTH);
-                let mut to_vec = [0u8; LIGHT_DATA_LENGTH];
-                to_vec.copy_from_slice(section);
-                out[i] = Some(to_vec);
+                out[i].copy_from_slice(section);
                 data = rest;
             }
         }
@@ -2850,17 +2849,20 @@ impl LightingData {
     }
 
     fn update_mask(&self) -> VarInt {
-        self.compute_has_mask(true)
+        self.compute_mask()
     }
 
     fn reset_mask(&self) -> VarInt {
-        self.compute_has_mask(false)
+        // Lighting was really buggy when this was computed. Setting it to 0 removes all issues
+        VarInt(0i32)
     }
 
-    fn compute_has_mask(&self, has: bool) -> VarInt {
+    fn compute_mask(&self) -> VarInt {
+        // Output lighting bitmast
         let mut out: u32 = 0;
         for i in 0..LIGHT_DATA_SECTIONS {
-            if self.data[i].is_some() == has {
+            // If any of the lighting data does not equal 0, set the bit on the bitmask
+            if self.data[i].iter().any(|d| *d != 0) {
                 out |= 1 << i;
             }
         }
@@ -2868,14 +2870,14 @@ impl LightingData {
         VarInt(out as i32)
     }
 
-    fn serialize_data<S: Serializer>(&self, to: &mut S) -> SerializeResult {
-        for item in self.data.iter() {
-            if let Some(contents) = item {
+    fn serialize_data<S: Serializer>(&self, bitmask: VarInt, to: &mut S) -> SerializeResult {
+        for i in 0..LIGHT_DATA_SECTIONS {
+            // gotta read the var int
+            if bitmask.0 & (1 << i) != 0 {
                 to.serialize_other(&VarInt(2048))?;
-                to.serialize_bytes(&contents[..])?;
+                to.serialize_bytes(&self.data[i][..])?;
             }
         }
-
         Ok(())
     }
 }
@@ -2884,14 +2886,10 @@ impl fmt::Debug for LightingData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "LightingData(update={:018b}, reset={:018b}, size={}, bytes={})",
+            "LightingData(update={:018b}, reset={:018b})",
             self.update_mask().0,
-            self.reset_mask().0,
-            self.data.iter().filter(move |v| v.is_some()).count(),
-            self.data.iter()
-                .filter_map(move |v| v.
-                    map(move |arr| arr.len()))
-                .sum::<usize>())
+            self.reset_mask().0
+        )
     }
 }
 
@@ -2938,12 +2936,16 @@ pub struct LightingUpdateSpec {
 
 impl Serialize for LightingUpdateSpec {
     fn mc_serialize<S: Serializer>(&self, to: &mut S) -> SerializeResult {
-        self.skylight_data.update_mask().mc_serialize(to)?;
-        self.blocklight_data.update_mask().mc_serialize(to)?;
+        let skylight_mask = self.skylight_data.update_mask();
+        skylight_mask.mc_serialize(to)?;
+        let blocklight_mask = self.blocklight_data.update_mask();
+        blocklight_mask.mc_serialize(to)?;
+
         self.skylight_data.reset_mask().mc_serialize(to)?;
         self.blocklight_data.reset_mask().mc_serialize(to)?;
-        self.skylight_data.serialize_data(to)?;
-        self.blocklight_data.serialize_data(to)
+
+        self.skylight_data.serialize_data(skylight_mask, to)?;
+        self.blocklight_data.serialize_data(blocklight_mask, to)
     }
 }
 
@@ -2951,11 +2953,11 @@ impl Deserialize for LightingUpdateSpec {
     fn mc_deserialize(data: &[u8]) -> DeserializeResult<'_, Self> {
         let Deserialized { value: skylight_update_mask, data } = VarInt::mc_deserialize(data)?;
         let Deserialized { value: blocklight_update_mask, data } = VarInt::mc_deserialize(data)?;
-        let Deserialized { value: _, data } = VarInt::mc_deserialize(data)?;
-        let Deserialized { value: _, data } = VarInt::mc_deserialize(data)?;
+        let Deserialized { value: skylight_empty_mask, data } = VarInt::mc_deserialize(data)?;
+        let Deserialized { value: blocklight_empty_mask, data } = VarInt::mc_deserialize(data)?;
 
-        let Deserialized { value: skylight_data, data } = LightingData::deserialize(skylight_update_mask, data)?;
-        let Deserialized { value: blocklight_data, data } = LightingData::deserialize(blocklight_update_mask, data)?;
+        let Deserialized { value: skylight_data, data } = LightingData::deserialize(skylight_update_mask, skylight_empty_mask, data)?;
+        let Deserialized { value: blocklight_data, data } = LightingData::deserialize(blocklight_update_mask, blocklight_empty_mask, data)?;
 
         Deserialized::ok(Self {
             skylight_data,
