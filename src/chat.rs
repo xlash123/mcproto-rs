@@ -263,9 +263,9 @@ pub struct BaseComponent {
     pub color: Option<ColorCode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub insertion: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", rename="clickEvent")]
     pub click_event: Option<ChatClickEvent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", rename="hoverEvent")]
     pub hover_event: Option<ChatHoverEvent>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra: Vec<BoxedChat>,
@@ -560,7 +560,8 @@ impl Serialize for ChatHoverEvent {
             ShowEntity(_) => "show_entity",
         })?;
 
-        m.serialize_key("value")?;
+        // m.serialize_key("value")?;
+        m.serialize_key("contents")?; // 1.16.3 uses "contents" instead of "value"
 
         match self {
             ShowText(body) => m.serialize_value(body),
